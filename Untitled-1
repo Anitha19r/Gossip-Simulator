@@ -1,0 +1,93 @@
+
+import org.apache.spark.rdd.RDD
+import scala.xml.{XML,NodeSeq}
+import org.apache.spark.sql.SparkSession
+import org.apache.spark._
+import org.apache.spark.SparkContext._
+
+object GraphXPageRank1 {
+  def main(args: Array[String]) {
+    if (args.length < 1) {
+      System.err.println("Usage: GraphXPageRank1 <file> ")
+      System.exit(1)
+    }
+
+    val spark = SparkSession
+        .builder
+        .appName("GraphXPageRank")
+        .getOrCreate()
+    val sc = spark.sparkContext
+//Load the Wikipedia Articles———
+    val wiki: RDD[String] = sc.textFile(args(0)).coalesce(20)
+    wiki.first
+
+    //Clean the Data—————
+    // Define the article class
+    case class Article(val title: String, val body: String)
+
+    //  Parse the articles
+    val articles = wiki.map(_.split('\t')).
+      // two filters on article format
+      filter(line => (line.length > 1 && !(line(1) contains "REDIRECT"))).
+      // store the results in an object for easier access
+      map(line => new Article(line(0).trim, line(1).trim)).cache
+
+    articles.count
+
+    //Making a Vertex RDD————
+    // Hash function to assign an Id to each article
+    def pageHash(title: String): VertexId = {
+      title.toLowerCase.replace("\\s", "").hashCode.toLong
+    }
+    // The vertices with id and article title:
+    val vertices: RDD[(VertexId, String)] = articles.map(a => (pageHash(a.title), a.title)).cache
+    vertices.count
+    //val pattern = "(?<=<target>)(.*?)(?=</target>)").r
+
+
+    //Making the Edge RDD ----- 
+    val pattern = "\\[\\[.+?\\]\\]".r
+    val edges: RDD[Edge[Double]] = articles.flatMap { a =>
+      val srcVid = pageHash(a.title)
+      pattern.findAllIn(a.body).map { link =>
+        val dstVid = pageHash(link.replace("[[", "").replace("]]", ""))
+        Edge(srcVid, dstVid, 1.0)
+      }
+    }
+    //edges_list.saveAsTextFile("../tmpout") 
+
+    //Making the Graph————
+    //val graph = Graph(vertices, edges_list, "").subgraph(vpred = {(v, d) => d.nonEmpty}).cache
+    //graph.vertices.count
+    //graph.triplets.count
+
+    //Running PageRank on Wikipedia————
+    //val prGraph = graph.staticPageRank(10).cache
+
+    //val prGraph = graph.pageRank(0.0001).vertices
+
+    //val titleAndPrGraph = graph.outerJoinVertices(prGraph.vertices) {
+    //  (v, title, rank) => (rank.getOrElse(0.0), title)
+    //}
+
+    //titleAndPrGraph.vertices.top(10) {
+    //  Ordering.by((entry: (VertexId, (Double, String))) => entry._2._1)
+    //}.foreach(t => println(t._2._2 + ": " + t._2._1))
+
+    //val graph = GraphLoader.edgeListFile(sc, "../tmpout/*")
+    val graph = Graph.fromEdgeTuples(edges,1)
+    val ranks = val ranks = graph.pageRank(0.001).vertices
+    val ranksByUsername =vertices.join(ranks)map {
+      case (id, (name, rank)) => (name,rank)
+    }
+    val x = ranksByUsername.sortWith(_._2 > _._2)
+    for( i<- 0 to 100){
+        println(x(i)._1+ " has rank: " +x(i)._2) 
+    }
+    val final_result= x.take(100)
+    val res = sc.parallelize(final_result)
+    res.saveAsTextFile("tmpout_graphx")
+    spark.stop()
+    
+  }
+  }
